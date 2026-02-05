@@ -247,37 +247,88 @@ function detectBackgroundColor(imageData: ImageData): {
 }
 
 /**
- * Сглаживает края для более красивого результата
+ * Антиалиасинг краёв - сглаживает "лесенку" БЕЗ потери деталей
+ * Добавляет полупрозрачные пиксели в пустые места для плавного перехода
+ * НЕ трогает существующие пиксели иконки (не съедает острые углы/засечки)
  */
 function smoothEdges(imageData: ImageData): void {
   const data = imageData.data;
   const width = imageData.width;
   const height = imageData.height;
 
-  // Создаём копию данных
   const originalData = new Uint8ClampedArray(data);
+
+  // Собираем пиксели для добавления (антиалиасинг)
+  const newPixels: Array<{idx: number, r: number, g: number, b: number, a: number}> = [];
 
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const idx = (y * width + x) * 4;
-
-      // Если пиксель частично прозрачный
-      if (originalData[idx + 3] > 0 && originalData[idx + 3] < 255) {
-        // Усредняем с соседями
-        let alphaSum = 0;
-        let count = 0;
-
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            const neighborIdx = ((y + dy) * width + (x + dx)) * 4;
-            alphaSum += originalData[neighborIdx + 3];
-            count++;
-          }
+      
+      // Ищем ПРОЗРАЧНЫЕ пиксели рядом с непрозрачными (там нужен антиалиасинг)
+      if (originalData[idx + 3] !== 0) continue;
+      
+      // Собираем цвета непрозрачных соседей
+      let opaqueCount = 0;
+      let totalR = 0, totalG = 0, totalB = 0;
+      let cardinalOpaque = 0; // Соседи по сторонам (не по диагонали)
+      
+      // Кардинальные направления (важнее для антиалиасинга)
+      const cardinals = [
+        { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+        { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
+      ];
+      
+      // Диагонали
+      const diagonals = [
+        { dx: -1, dy: -1 }, { dx: 1, dy: -1 },
+        { dx: -1, dy: 1 }, { dx: 1, dy: 1 }
+      ];
+      
+      for (const { dx, dy } of cardinals) {
+        const nIdx = ((y + dy) * width + (x + dx)) * 4;
+        if (originalData[nIdx + 3] > 200) {
+          opaqueCount++;
+          cardinalOpaque++;
+          totalR += originalData[nIdx];
+          totalG += originalData[nIdx + 1];
+          totalB += originalData[nIdx + 2];
         }
-
-        data[idx + 3] = Math.round(alphaSum / count);
+      }
+      
+      for (const { dx, dy } of diagonals) {
+        const nIdx = ((y + dy) * width + (x + dx)) * 4;
+        if (originalData[nIdx + 3] > 200) {
+          opaqueCount++;
+          totalR += originalData[nIdx];
+          totalG += originalData[nIdx + 1];
+          totalB += originalData[nIdx + 2];
+        }
+      }
+      
+      // Добавляем антиалиасинг только если это "лесенка"
+      // (2-3 непрозрачных соседа, хотя бы 1 по кардинальному направлению)
+      if (opaqueCount >= 2 && opaqueCount <= 4 && cardinalOpaque >= 1) {
+        // Усредняем цвет соседей
+        const avgR = Math.round(totalR / opaqueCount);
+        const avgG = Math.round(totalG / opaqueCount);
+        const avgB = Math.round(totalB / opaqueCount);
+        
+        // Альфа зависит от количества соседей (больше соседей = плотнее пиксель)
+        // Но мягкая - это антиалиасинг, не заполнение
+        const alpha = Math.round(opaqueCount * 40); // 80-160
+        
+        newPixels.push({ idx, r: avgR, g: avgG, b: avgB, a: alpha });
       }
     }
+  }
+
+  // Применяем новые пиксели (антиалиасинг)
+  for (const pixel of newPixels) {
+    data[pixel.idx] = pixel.r;
+    data[pixel.idx + 1] = pixel.g;
+    data[pixel.idx + 2] = pixel.b;
+    data[pixel.idx + 3] = pixel.a;
   }
 }
 

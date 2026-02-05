@@ -7,6 +7,7 @@ interface ProcessedFile {
   original: File;
   processed?: Blob;
   preview?: string;
+  originalPreview?: string;
   status: 'pending' | 'processing' | 'done' | 'error';
   error?: string;
 }
@@ -17,6 +18,7 @@ export function BatchProcessor() {
   const [bgPreview, setBgPreview] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [modalFile, setModalFile] = useState<ProcessedFile | null>(null);
   
   // Drag & drop состояния
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -30,50 +32,49 @@ export function BatchProcessor() {
   const [removeLightEdges, setRemoveLightEdges] = useState(false);
   const [erodePixels, setErodePixels] = useState(0);
   const [edgeCleanup, setEdgeCleanup] = useState(false);
-  const [removeLiquidGlass, setRemoveLiquidGlass] = useState(false);
-  const [glassWidth, setGlassWidth] = useState(2);
-  const [glassBrightness, setGlassBrightness] = useState(220);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
 
   // Пресеты настроек
-  const applyPreset = (preset: 'soft' | 'normal' | 'aggressive' | 'liquidglass') => {
+  const applyPreset = (preset: 'soft' | 'normal' | 'aggressive') => {
     if (preset === 'soft') {
       setThreshold(15);
       setEdgeSmoothing(false);
       setRemoveLightEdges(false);
       setErodePixels(0);
       setEdgeCleanup(false);
-      setRemoveLiquidGlass(false);
     } else if (preset === 'normal') {
       setThreshold(25);
       setEdgeSmoothing(true);
       setRemoveLightEdges(true);
       setErodePixels(1);
       setEdgeCleanup(false);
-      setRemoveLiquidGlass(false);
     } else if (preset === 'aggressive') {
       setThreshold(35);
       setEdgeSmoothing(true);
       setRemoveLightEdges(true);
       setErodePixels(2);
       setEdgeCleanup(true);
-      setRemoveLiquidGlass(false);
-    } else if (preset === 'liquidglass') {
-      setThreshold(25);
-      setEdgeSmoothing(true);
-      setRemoveLightEdges(true);
-      setErodePixels(1);
-      setEdgeCleanup(false);
-      setRemoveLiquidGlass(true);
-      setGlassWidth(2);
-      setGlassBrightness(220);
     }
   };
 
   // Добавление файлов с заменой дубликатов
-  const addFiles = useCallback((newFiles: File[]) => {
+  const addFiles = useCallback(async (newFiles: File[]) => {
+    const filesToAdd: ProcessedFile[] = [];
+    
+    // Создаём превью для всех новых файлов
+    for (const file of newFiles) {
+      if (!file.type.startsWith('image/')) continue;
+      
+      const originalPreview = await createPreview(file);
+      filesToAdd.push({
+        original: file,
+        originalPreview,
+        status: 'pending',
+      });
+    }
+    
     setFiles(prev => {
       const existingByName = new Map<string, number>();
       prev.forEach((f, idx) => existingByName.set(f.original.name, idx));
@@ -81,23 +82,13 @@ export function BatchProcessor() {
       const updated = [...prev];
       const toAdd: ProcessedFile[] = [];
       
-      for (const file of newFiles) {
-        if (!file.type.startsWith('image/')) continue;
-        
-        const existingIdx = existingByName.get(file.name);
+      for (const file of filesToAdd) {
+        const existingIdx = existingByName.get(file.original.name);
         
         if (existingIdx !== undefined) {
-          updated[existingIdx] = {
-            original: file,
-            status: 'pending',
-            processed: undefined,
-            preview: undefined,
-          };
+          updated[existingIdx] = file;
         } else {
-          toAdd.push({
-            original: file,
-            status: 'pending',
-          });
+          toAdd.push(file);
         }
       }
       
@@ -191,9 +182,6 @@ export function BatchProcessor() {
           removeLightEdges,
           erodePixels,
           edgeCleanup,
-          removeLiquidGlass,
-          glassOutlineWidth: glassWidth,
-          glassBrightness,
         }
       );
 
@@ -236,10 +224,19 @@ export function BatchProcessor() {
     window.addEventListener('beforeunload', preventClose);
 
     try {
-      for (let i = 0; i < files.length; i++) {
-        if (files[i].status === 'pending' || files[i].status === 'error') {
+      // Обрабатываем в алфавитном порядке (как отображаем)
+      const sortedFiles = [...files].sort((a, b) => 
+        a.original.name.localeCompare(b.original.name)
+      );
+
+      for (let i = 0; i < sortedFiles.length; i++) {
+        if (sortedFiles[i].status === 'pending' || sortedFiles[i].status === 'error') {
           setCurrentIndex(i + 1);
-          await processFile(files[i], i);
+          
+          // Находим индекс в оригинальном массиве
+          const originalIndex = files.findIndex(f => f.original.name === sortedFiles[i].original.name);
+          
+          await processFile(files[originalIndex], originalIndex);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -342,54 +339,48 @@ export function BatchProcessor() {
   const pendingCount = files.filter(f => f.status === 'pending').length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white p-4 md:p-8">
+    <div className="min-h-screen bg-gray-950 text-gray-100 p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
         {/* Заголовок */}
-        <div className="text-center mb-6">
-          <h1 className="text-4xl md:text-5xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-            🎨 Batch Icon Processor
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold mb-1 text-white">
+            Batch Icon Processor
           </h1>
-          <p className="text-gray-400">
-            Извлеките иконки из подложки • Drag & Drop поддерживается!
+          <p className="text-gray-500 text-sm">
+            Массовое удаление подложки с иконок
           </p>
         </div>
 
         {/* Настройки */}
-        <div className="bg-gray-800/50 backdrop-blur border border-gray-700 rounded-2xl p-4 md:p-6 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Settings className="text-blue-400" />
-            <h2 className="text-xl font-semibold">Настройки</h2>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+          <div className="flex items-center gap-2 mb-6">
+            <Settings size={20} className="text-gray-400" />
+            <h2 className="text-lg font-semibold text-white">Настройки обработки</h2>
           </div>
 
           {/* Пресеты */}
-          <div className="mb-6 p-4 bg-gradient-to-r from-green-900/30 to-blue-900/30 border-2 border-green-500/50 rounded-lg">
-            <div className="text-sm font-semibold mb-3 text-green-300">
-              🎯 Быстрые пресеты
+          <div className="mb-6">
+            <div className="text-sm font-medium mb-3 text-gray-400">
+              Пресеты
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => applyPreset('soft')}
-                className="px-3 py-2 bg-green-600/30 hover:bg-green-600/50 border-2 border-green-500/70 rounded-lg text-sm font-semibold transition"
+                className="px-4 py-2.5 bg-gray-800 hover:bg-gray-750 border border-gray-700 hover:border-blue-500 rounded text-sm font-medium transition-all"
               >
-                🟢 Мягкий
+                Мягкий
               </button>
               <button
                 onClick={() => applyPreset('normal')}
-                className="px-3 py-2 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/50 rounded-lg text-sm transition"
+                className="px-4 py-2.5 bg-gray-800 hover:bg-gray-750 border border-gray-700 hover:border-blue-500 rounded text-sm font-medium transition-all"
               >
-                🔵 Нормальный
+                Нормальный
               </button>
               <button
                 onClick={() => applyPreset('aggressive')}
-                className="px-3 py-2 bg-orange-600/20 hover:bg-orange-600/40 border border-orange-500/50 rounded-lg text-sm transition"
+                className="px-4 py-2.5 bg-gray-800 hover:bg-gray-750 border border-gray-700 hover:border-blue-500 rounded text-sm font-medium transition-all"
               >
-                🟠 Агрессивный
-              </button>
-              <button
-                onClick={() => applyPreset('liquidglass')}
-                className="px-3 py-2 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/50 rounded-lg text-sm transition"
-              >
-                ✨ Liquid Glass
+                Агрессивный
               </button>
             </div>
           </div>
@@ -397,8 +388,11 @@ export function BatchProcessor() {
           <div className="grid md:grid-cols-2 gap-6">
             {/* Эталонная подложка с Drag & Drop */}
             <div>
-              <label className="block text-sm font-medium mb-2">
-                🎯 Эталонная подложка
+              <label className="block text-sm font-medium mb-2 text-gray-300 flex items-center gap-2">
+                Эталонная подложка
+                <span className="text-xs text-gray-500 font-normal" title="Чистая подложка без иконки. Всё что видно на эталоне будет удалено с иконок.">
+                  ℹ️
+                </span>
               </label>
               <input
                 type="file"
@@ -412,26 +406,28 @@ export function BatchProcessor() {
                 onDragOver={handleBgDragOver}
                 onDragLeave={handleBgDragLeave}
                 onDrop={handleBgDrop}
-                className={`w-full px-4 py-4 rounded-lg transition flex items-center justify-center gap-2 border-2 border-dashed ${
+                className={`w-full px-4 py-3 rounded transition flex items-center justify-center gap-2 border ${
                   isDraggingBg
-                    ? 'bg-blue-600/50 border-blue-400 scale-105'
+                    ? 'bg-blue-600/20 border-blue-500'
                     : referenceBackground 
-                      ? 'bg-green-700 hover:bg-green-600 border-green-500' 
-                      : 'bg-gray-700 hover:bg-gray-600 border-gray-500'
+                      ? 'bg-gray-800 hover:bg-gray-750 border-green-600' 
+                      : 'bg-gray-800 hover:bg-gray-750 border-gray-700 hover:border-gray-600'
                 }`}
               >
-                <Upload size={20} />
-                {isDraggingBg 
-                  ? '📥 Отпустите файл!' 
-                  : referenceBackground 
-                    ? '✓ Подложка загружена' 
-                    : 'Перетащите или выберите эталон'}
+                <Upload size={18} />
+                <span className="text-sm font-medium">
+                  {isDraggingBg 
+                    ? '📥 Отпустите' 
+                    : referenceBackground 
+                      ? 'Эталон загружен' 
+                      : 'Выберите или перетащите'}
+                </span>
               </button>
               {bgPreview && (
                 <div className="mt-3 flex items-center gap-3">
-                  <img src={bgPreview} alt="Background" className="w-16 h-16 rounded border border-gray-600" />
-                  <div className="text-xs text-green-400">
-                    ✓ Всё что видно на эталоне будет удалено
+                  <img src={bgPreview} alt="Background" className="w-12 h-12 rounded border border-gray-700" />
+                  <div className="text-xs text-gray-400">
+                    {referenceBackground?.name}
                   </div>
                 </div>
               )}
@@ -439,8 +435,11 @@ export function BatchProcessor() {
 
             {/* Порог */}
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Порог: {threshold}
+              <label className="block text-sm font-medium mb-2 text-gray-300 flex items-center gap-2">
+                Порог ({threshold})
+                <span className="text-xs text-gray-500 font-normal" title="Насколько похож пиксель на эталон чтобы удалиться. Больше = удаляет больше похожих.">
+                  ℹ️
+                </span>
               </label>
               <input
                 type="range"
@@ -448,18 +447,18 @@ export function BatchProcessor() {
                 max="100"
                 value={threshold}
                 onChange={(e) => setThreshold(Number(e.target.value))}
-                className="w-full"
+                className="w-full accent-blue-600"
               />
-              <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>Точнее</span>
-                <span>Агрессивнее</span>
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>Мягко</span>
+                <span>Агрессивно</span>
               </div>
             </div>
 
             {/* Режим по цвету */}
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Или удалить по цвету
+              <label className="block text-sm font-medium mb-2 text-gray-300">
+                Удаление по цвету
               </label>
               <div className="flex gap-2">
                 <input
@@ -471,9 +470,9 @@ export function BatchProcessor() {
                     setReferenceBackground(null);
                     setBgPreview('');
                   }}
-                  className="w-12 h-10 rounded cursor-pointer"
+                  className="w-10 h-10 rounded cursor-pointer bg-gray-800 border border-gray-700"
                 />
-                <div className="flex-1 px-3 py-2 bg-gray-700 rounded-lg text-sm">
+                <div className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-400">
                   {backgroundColor}
                 </div>
               </div>
@@ -486,18 +485,21 @@ export function BatchProcessor() {
                 id="smoothing"
                 checked={edgeSmoothing}
                 onChange={(e) => setEdgeSmoothing(e.target.checked)}
-                className="w-5 h-5"
+                className="w-4 h-4 accent-blue-600"
               />
-              <label htmlFor="smoothing" className="text-sm">
+              <label htmlFor="smoothing" className="text-sm text-gray-300 flex items-center gap-2">
                 Сглаживание краёв
+                <span className="text-xs text-gray-500 font-normal" title="Добавляет плавный переход вокруг иконки, убирает 'лесенку' на краях.">
+                  ℹ️
+                </span>
               </label>
             </div>
           </div>
 
           {/* Расширенные настройки */}
-          <details className="mt-6">
-            <summary className="cursor-pointer text-yellow-400 font-semibold">
-              ⚡ Расширенные настройки (артефакты)
+          <details className="mt-6 pt-6 border-t border-gray-800">
+            <summary className="cursor-pointer text-sm font-medium text-gray-400 hover:text-gray-300">
+              Дополнительные настройки
             </summary>
             <div className="mt-4 grid md:grid-cols-3 gap-4">
               <div className="flex items-center gap-3">
@@ -506,16 +508,22 @@ export function BatchProcessor() {
                   id="removeLightEdges"
                   checked={removeLightEdges}
                   onChange={(e) => setRemoveLightEdges(e.target.checked)}
-                  className="w-5 h-5"
+                  className="w-4 h-4 accent-blue-600"
                 />
-                <label htmlFor="removeLightEdges" className="text-sm">
-                  Удалять светлые края
+                <label htmlFor="removeLightEdges" className="text-sm text-gray-300 flex items-center gap-2">
+                  Удалить светлые края
+                  <span className="text-xs text-gray-500 font-normal" title="Удаляет светлые полупрозрачные пиксели на границе иконки.">
+                    ℹ️
+                  </span>
                 </label>
               </div>
 
               <div>
-                <label className="block text-sm mb-1">
-                  Эрозия: {erodePixels}px
+                <label className="block text-sm mb-1 text-gray-300 flex items-center gap-2">
+                  Эрозия ({erodePixels}px)
+                  <span className="text-xs text-gray-500 font-normal" title="Удаляет N пикселей от внешнего края иконки. Осторожно с мелкими деталями!">
+                    ℹ️
+                  </span>
                 </label>
                 <input
                   type="range"
@@ -523,7 +531,7 @@ export function BatchProcessor() {
                   max="3"
                   value={erodePixels}
                   onChange={(e) => setErodePixels(Number(e.target.value))}
-                  className="w-full"
+                  className="w-full accent-blue-600"
                 />
               </div>
 
@@ -533,10 +541,13 @@ export function BatchProcessor() {
                   id="edgeCleanup"
                   checked={edgeCleanup}
                   onChange={(e) => setEdgeCleanup(e.target.checked)}
-                  className="w-5 h-5"
+                  className="w-4 h-4 accent-blue-600"
                 />
-                <label htmlFor="edgeCleanup" className="text-sm">
+                <label htmlFor="edgeCleanup" className="text-sm text-gray-300 flex items-center gap-2">
                   Агрессивная очистка
+                  <span className="text-xs text-gray-500 font-normal" title="Многократная обработка краёв для максимального удаления артефактов. Может повредить детали.">
+                    ℹ️
+                  </span>
                 </label>
               </div>
             </div>
@@ -545,17 +556,21 @@ export function BatchProcessor() {
 
         {/* Предупреждение при обработке */}
         {isProcessing && (
-          <div className="bg-yellow-600/20 border-2 border-yellow-500 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <div className="text-2xl">⚠️</div>
-            <div>
-              <span className="font-bold text-yellow-400">НЕ ЗАКРЫВАЙТЕ СТРАНИЦУ!</span>
-              <span className="text-gray-300 ml-2">Осталось: {files.length - currentIndex} файлов</span>
+          <div className="bg-amber-500/10 border border-amber-500/50 rounded p-4 mb-6 flex items-center gap-3">
+            <div className="text-amber-500 font-semibold text-sm">
+              Обработка...
+            </div>
+            <div className="flex-1 text-sm text-gray-400">
+              Осталось: {files.length - currentIndex} из {files.length}
+            </div>
+            <div className="text-xs text-gray-500">
+              Не закрывайте страницу
             </div>
           </div>
         )}
 
         {/* Загрузка файлов с Drag & Drop */}
-        <div className="bg-gray-800/50 backdrop-blur border border-gray-700 rounded-2xl p-4 md:p-6 mb-6">
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
           <input
             type="file"
             ref={fileInputRef}
@@ -571,19 +586,25 @@ export function BatchProcessor() {
             onDragLeave={handleFilesDragLeave}
             onDrop={handleFilesDrop}
             disabled={isProcessing}
-            className={`w-full px-6 py-6 rounded-xl transition flex flex-col items-center justify-center gap-2 text-lg font-semibold border-2 border-dashed ${
+            className={`w-full px-6 py-8 rounded transition flex flex-col items-center justify-center gap-3 border-2 border-dashed ${
               isDraggingFiles
-                ? 'bg-purple-600/50 border-purple-400 scale-102'
-                : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 border-transparent'
+                ? 'bg-blue-500/10 border-blue-500'
+                : 'bg-gray-800/50 hover:bg-gray-800 border-gray-700 hover:border-gray-600'
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
-            <Upload size={32} />
-            {isDraggingFiles 
-              ? '📥 Отпустите файлы!' 
-              : `Перетащите иконки сюда или нажмите для выбора`}
-            <span className="text-sm font-normal opacity-75">
-              {files.length > 0 ? `Загружено: ${files.length}` : 'Поддерживаются PNG, JPG, WebP'}
+            <Upload size={28} className="text-gray-500" />
+            <span className="text-sm font-medium text-gray-300">
+              {isDraggingFiles 
+                ? 'Отпустите файлы' 
+                : files.length > 0 
+                  ? `Загружено: ${files.length}` 
+                  : 'Выберите файлы или перетащите сюда'}
             </span>
+            {!isDraggingFiles && files.length === 0 && (
+              <span className="text-xs text-gray-500">
+                PNG, JPG, WebP
+              </span>
+            )}
           </button>
 
           {files.length > 0 && (
@@ -591,49 +612,49 @@ export function BatchProcessor() {
               <button
                 onClick={startBatchProcessing}
                 disabled={isProcessing || pendingCount === 0}
-                className="flex-1 min-w-[200px] px-6 py-3 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition flex items-center justify-center gap-2 font-semibold"
+                className="flex-1 min-w-[200px] px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded transition flex items-center justify-center gap-2 font-medium text-sm"
               >
-                <Play size={20} />
-                {isProcessing ? `Обработка ${currentIndex}/${files.length}...` : `Запустить (${pendingCount})`}
+                <Play size={16} />
+                {isProcessing ? `${currentIndex}/${files.length}` : `Запустить (${pendingCount})`}
               </button>
               
               <button
                 onClick={isProcessing ? downloadProgress : downloadAllAsZip}
                 disabled={processedCount === 0}
-                className="flex-1 min-w-[200px] px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition flex items-center justify-center gap-2 font-semibold"
+                className="flex-1 min-w-[200px] px-5 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition flex items-center justify-center gap-2 font-medium text-sm"
               >
-                <Download size={20} />
-                {isProcessing ? `💾 Сохранить (${processedCount})` : `Скачать ZIP (${processedCount})`}
+                <Download size={16} />
+                {isProcessing ? `Сохранить (${processedCount})` : `ZIP (${processedCount})`}
               </button>
 
               <button
                 onClick={clearAll}
                 disabled={isProcessing}
-                className="px-4 py-3 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition"
+                className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded transition"
               >
-                <Trash2 size={20} />
+                <Trash2 size={16} />
               </button>
             </div>
           )}
 
           {/* Статистика */}
           {files.length > 0 && (
-            <div className="mt-4 grid grid-cols-4 gap-2 text-center text-sm">
-              <div className="bg-gray-900/50 p-2 rounded-lg">
-                <div className="text-xl font-bold">{files.length}</div>
-                <div className="text-xs text-gray-400">Всего</div>
+            <div className="mt-4 grid grid-cols-4 gap-3 text-sm">
+              <div className="bg-gray-800 p-3 rounded">
+                <div className="text-lg font-semibold text-white">{files.length}</div>
+                <div className="text-xs text-gray-500">Всего</div>
               </div>
-              <div className="bg-blue-900/30 p-2 rounded-lg">
-                <div className="text-xl font-bold text-blue-400">{pendingCount}</div>
-                <div className="text-xs text-gray-400">Ожидают</div>
+              <div className="bg-gray-800 p-3 rounded">
+                <div className="text-lg font-semibold text-gray-400">{pendingCount}</div>
+                <div className="text-xs text-gray-500">Ожидают</div>
               </div>
-              <div className="bg-green-900/30 p-2 rounded-lg">
-                <div className="text-xl font-bold text-green-400">{processedCount}</div>
-                <div className="text-xs text-gray-400">Готово</div>
+              <div className="bg-gray-800 p-3 rounded">
+                <div className="text-lg font-semibold text-green-500">{processedCount}</div>
+                <div className="text-xs text-gray-500">Готово</div>
               </div>
-              <div className="bg-red-900/30 p-2 rounded-lg">
-                <div className="text-xl font-bold text-red-400">{errorCount}</div>
-                <div className="text-xs text-gray-400">Ошибки</div>
+              <div className="bg-gray-800 p-3 rounded">
+                <div className="text-lg font-semibold text-red-500">{errorCount}</div>
+                <div className="text-xs text-gray-500">Ошибки</div>
               </div>
             </div>
           )}
@@ -641,47 +662,47 @@ export function BatchProcessor() {
 
         {/* Список файлов */}
         {files.length > 0 && (
-          <div className="bg-gray-800/50 backdrop-blur border border-gray-700 rounded-2xl p-4 md:p-6">
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
             <div className="flex items-center gap-2 mb-4">
-              <ImageIcon className="text-purple-400" />
-              <h2 className="text-xl font-semibold">Файлы ({files.length})</h2>
+              <ImageIcon size={18} className="text-gray-500" />
+              <h2 className="text-lg font-semibold text-white">Файлы ({files.length})</h2>
             </div>
 
-            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3 max-h-[500px] overflow-y-auto">
-              {files.map((file, index) => (
+            <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-2 max-h-[500px] overflow-y-auto">
+              {[...files].sort((a, b) => a.original.name.localeCompare(b.original.name)).map((file, index) => (
                 <div
                   key={`${file.original.name}-${index}`}
-                  className={`bg-gray-900/50 rounded-lg p-2 border-2 ${
+                  className={`bg-gray-800 rounded p-2 border ${
                     file.status === 'done'
-                      ? 'border-green-500'
+                      ? 'border-green-600'
                       : file.status === 'processing'
-                      ? 'border-blue-500 animate-pulse'
+                      ? 'border-blue-600 animate-pulse'
                       : file.status === 'error'
-                      ? 'border-red-500'
+                      ? 'border-red-600'
                       : 'border-gray-700'
                   }`}
                 >
-                  {file.preview ? (
-                    <div className="relative group">
-                      <img
-                        src={file.preview}
-                        alt={file.original.name}
-                        className="w-full h-16 object-contain rounded bg-gray-800"
-                      />
+                  <div className="relative group">
+                    <img
+                      src={file.preview || file.originalPreview}
+                      alt={file.original.name}
+                      onClick={() => setModalFile(file)}
+                      className="w-full h-16 object-contain rounded bg-gray-900 cursor-pointer hover:opacity-80 transition"
+                    />
+                    {file.processed && (
                       <button
-                        onClick={() => downloadSingle(file)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadSingle(file);
+                        }}
                         className="absolute top-0 right-0 bg-blue-600 hover:bg-blue-500 p-1 rounded opacity-0 group-hover:opacity-100 transition"
                       >
-                        <Download size={12} />
+                        <Download size={10} />
                       </button>
-                    </div>
-                  ) : (
-                    <div className="w-full h-16 bg-gray-800 rounded flex items-center justify-center">
-                      <ImageIcon className="text-gray-600" size={24} />
-                    </div>
-                  )}
+                    )}
+                  </div>
                   
-                  <div className="text-xs truncate mt-1" title={file.original.name}>
+                  <div className="text-xs truncate mt-1.5 text-gray-400" title={file.original.name}>
                     {file.original.name.replace(/\.[^/.]+$/, '')}
                   </div>
                 </div>
@@ -690,16 +711,100 @@ export function BatchProcessor() {
           </div>
         )}
 
+        {/* Модалка просмотра */}
+        {modalFile && (
+          <div 
+            className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+            onClick={() => setModalFile(null)}
+          >
+            <div 
+              className="bg-gray-900 border border-gray-800 rounded-lg max-w-4xl w-full max-h-[90vh] overflow-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Заголовок */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-800">
+                <h3 className="text-lg font-semibold text-white truncate">
+                  {modalFile.original.name}
+                </h3>
+                <button
+                  onClick={() => setModalFile(null)}
+                  className="text-gray-400 hover:text-white text-2xl leading-none"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Превью */}
+              <div className="p-6">
+                <div className="grid md:grid-cols-2 gap-6">
+                  {/* Оригинал */}
+                  <div>
+                    <div className="text-sm font-medium mb-2 text-gray-400">Оригинал</div>
+                    <div className="bg-gray-800 rounded-lg p-4 flex items-center justify-center min-h-[300px]">
+                      {modalFile.originalPreview ? (
+                        <img 
+                          src={modalFile.originalPreview} 
+                          alt="Original" 
+                          className="max-w-full max-h-[400px] object-contain"
+                        />
+                      ) : (
+                        <div className="text-gray-600">Загрузка...</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Обработанный */}
+                  <div>
+                    <div className="text-sm font-medium mb-2 text-gray-400">
+                      {modalFile.status === 'done' ? 'Результат' : modalFile.status === 'processing' ? 'Обработка...' : 'Не обработан'}
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-4 flex items-center justify-center min-h-[300px]">
+                      {modalFile.preview ? (
+                        <img 
+                          src={modalFile.preview} 
+                          alt="Processed" 
+                          className="max-w-full max-h-[400px] object-contain"
+                        />
+                      ) : modalFile.status === 'processing' ? (
+                        <div className="text-blue-500 animate-pulse">Обработка...</div>
+                      ) : (
+                        <div className="text-gray-600">Ожидает обработки</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Действия */}
+                {modalFile.processed && (
+                  <div className="mt-6 flex gap-3">
+                    <button
+                      onClick={() => downloadSingle(modalFile)}
+                      className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 rounded transition flex items-center justify-center gap-2 font-medium text-sm"
+                    >
+                      <Download size={16} />
+                      Скачать
+                    </button>
+                    <button
+                      onClick={() => setModalFile(null)}
+                      className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded transition text-sm"
+                    >
+                      Закрыть
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Инструкция */}
         {files.length === 0 && (
-          <div className="bg-gray-800/30 border border-gray-700 rounded-2xl p-6 text-center">
-            <div className="text-5xl mb-4">🚀</div>
-            <h3 className="text-xl font-bold mb-3">Как использовать?</h3>
-            <div className="text-gray-400 space-y-1 text-sm">
-              <p>1. Загрузите <strong className="text-white">эталонную подложку</strong> (drag & drop)</p>
-              <p>2. Перетащите <strong className="text-white">все иконки</strong></p>
-              <p>3. Нажмите <strong className="text-white">Запустить</strong></p>
-              <p>4. <strong className="text-white">Скачайте ZIP</strong></p>
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-8 text-center">
+            <div className="text-gray-500 space-y-2 text-sm">
+              <p>1. Загрузите эталонную подложку</p>
+              <p>2. Добавьте файлы для обработки</p>
+              <p>3. Запустите обработку</p>
+              <p>4. Скачайте результаты в ZIP</p>
             </div>
           </div>
         )}
