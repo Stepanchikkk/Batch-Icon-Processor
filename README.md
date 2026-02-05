@@ -4,7 +4,7 @@
 
 ## Демо
 
-**[Открыть приложение](https://Stepanchikkk.github.io/batch-icon-processor/)**
+**[Открыть приложение](https://stepanchikkk.github.io/Batch-Icon-Processor/)**
 
 ## Как использовать
 
