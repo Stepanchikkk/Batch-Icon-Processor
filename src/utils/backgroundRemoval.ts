@@ -12,6 +12,8 @@ export interface ProcessingOptions {
   removeLiquidGlass?: boolean; // Удалять светлую обводку liquid glass
   glassOutlineWidth?: number; // Ширина обводки (1-5 пикселей)
   glassBrightness?: number; // Яркость обводки для удаления (0-255)
+  useSupersampling?: boolean; // Supersampling для качественных краёв
+  supersampleScale?: number; // Масштаб supersampling (2-8)
 }
 
 /**
@@ -33,6 +35,8 @@ export async function removeBackground(
     removeLiquidGlass = false,
     glassOutlineWidth = 2,
     glassBrightness = 200,
+    useSupersampling = false,
+    supersampleScale = 4,
   } = options;
 
   // Загружаем изображение
@@ -101,13 +105,50 @@ export async function removeBackground(
 
   ctx.putImageData(imageData, 0, 0);
 
-  // Конвертируем в PNG blob
-  return new Promise((resolve) => {
+  let resultBlob: Blob | null = null;
+  await new Promise<void>((resolve) => {
     canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else throw new Error('Failed to create blob');
+      if (blob) resultBlob = blob;
+      resolve();
     }, 'image/png');
   });
+
+  if (!resultBlob) throw new Error('Failed to create blob');
+
+  // Применяем supersampling если включено
+  if (useSupersampling && supersampleScale > 1) {
+    const originalBlob = resultBlob;
+    const originalImg = await loadImage(
+      new File([originalBlob], 'temp.png', { type: 'image/png' })
+    );
+
+    // Увеличиваем в supersampleScale раз
+    const largeCanvas = document.createElement('canvas');
+    largeCanvas.width = originalImg.width * supersampleScale;
+    largeCanvas.height = originalImg.height * supersampleScale;
+    const largeCtx = largeCanvas.getContext('2d')!;
+    largeCtx.imageSmoothingEnabled = true;
+    largeCtx.imageSmoothingQuality = 'high';
+    largeCtx.drawImage(originalImg, 0, 0, largeCanvas.width, largeCanvas.height);
+
+    // Уменьшаем обратно с антиалиасингом
+    const finalCanvas = document.createElement('canvas');
+    finalCanvas.width = originalImg.width;
+    finalCanvas.height = originalImg.height;
+    const finalCtx = finalCanvas.getContext('2d')!;
+    finalCtx.imageSmoothingEnabled = true;
+    finalCtx.imageSmoothingQuality = 'high';
+    finalCtx.drawImage(largeCanvas, 0, 0, finalCanvas.width, finalCanvas.height);
+
+    return new Promise((resolve) => {
+      finalCanvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else resolve(resultBlob!);
+      }, 'image/png');
+    });
+  }
+
+  return resultBlob;
 }
 
 /**
